@@ -1,4 +1,7 @@
+pub mod discover;
+pub mod extract;
 pub mod model;
+pub mod parser;
 
 use std::path::{Path, PathBuf};
 

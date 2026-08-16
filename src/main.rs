@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use anyhow::{Result, bail};
-use aog_solutions::{DEFAULT_DATA_FILE, DEFAULT_GAME_DIR};
+use anyhow::Result;
+use aog_solutions::{DEFAULT_DATA_FILE, DEFAULT_GAME_DIR, ExtractOptions, extract};
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -28,11 +28,15 @@ enum Command {
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Extract { game_dir, output } => {
-            bail!(
-                "extractor skeleton: {} -> {}",
-                game_dir.display(),
+            let report = extract::run(&ExtractOptions::new(game_dir, &output))?;
+            println!(
+                "Extracted {} puzzles from {} candidate sources in {} PAK archives to {}",
+                report.puzzles,
+                report.scanned_sources,
+                report.archives,
                 output.display()
-            )
+            );
+            Ok(())
         }
     }
 }
