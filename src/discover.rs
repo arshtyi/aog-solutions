@@ -53,23 +53,30 @@ pub fn discover(data: &[u8]) -> Vec<RawPuzzle> {
 
     let mut result = Vec::new();
     let mut candidate: Option<Candidate> = None;
+    let mut pending_headers = Vec::new();
     for fragment in selected {
         for line in split_lines(&fragment.text) {
+            let trimmed = line.trim();
             if let Some((_, height)) = parse_dimensions(line.trim()) {
+                finish_candidate(&mut candidate, &mut result);
+                let mut lines = std::mem::take(&mut pending_headers);
+                lines.push(line);
                 candidate = Some(Candidate {
                     offset: fragment.start,
                     height,
                     phase: Phase::Header,
                     solution_boundaries: 0,
-                    lines: vec![line],
+                    lines,
                 });
                 continue;
             }
 
             let Some(active) = candidate.as_mut() else {
+                if is_header_line(trimmed) {
+                    pending_headers.push(line);
+                }
                 continue;
             };
-            let trimmed = line.trim();
             match active.phase {
                 Phase::Header => {
                     if trimmed == "PUZZLE" {
@@ -106,7 +113,27 @@ pub fn discover(data: &[u8]) -> Vec<RawPuzzle> {
             }
         }
     }
+    finish_candidate(&mut candidate, &mut result);
     result
+}
+
+fn finish_candidate(candidate: &mut Option<Candidate>, result: &mut Vec<RawPuzzle>) {
+    let Some(finished) = candidate.take() else {
+        return;
+    };
+    if finished.phase == Phase::Solution
+        && finished
+            .lines
+            .iter()
+            .skip_while(|line| line.trim() != "SOLUTION")
+            .skip(1)
+            .any(|line| line.contains('#') || line.contains('+'))
+    {
+        result.push(RawPuzzle {
+            offset: finished.offset,
+            lines: finished.lines,
+        });
+    }
 }
 
 fn unreal_strings(data: &[u8]) -> Vec<Fragment> {
@@ -302,5 +329,29 @@ mod tests {
         let data = b"noise\0DIMENSIONS 1 1\nDIFFICULTY 1\nPUZZLE\n+--+\n|..|\n+--+\nSOLUTION\n+##+\n#  #\n+##+\0tail";
 
         assert_eq!(discover(data).len(), 1);
+    }
+
+    #[test]
+    fn recovers_an_irregular_puzzle_with_padding_rows() {
+        let data = b"DIMENSIONS 2 2\nDIFFICULTY 1\nPUZZLE\n      \n+--+  \n|..|  \n+--+  \nSOLUTION\n      \n+##+  \n#  #  \n+##+  \n";
+
+        let puzzles = discover(data);
+
+        assert_eq!(puzzles.len(), 1);
+        assert!(puzzles[0].lines.iter().any(|line| line == "SOLUTION"));
+    }
+
+    #[test]
+    fn preserves_headers_before_dimensions() {
+        let data = b"DIFFICULTY 4\nPUBLIC_ID 12345\nDIMENSIONS 1 1\nPUZZLE\n+--+\n|..|\n+--+\nSOLUTION\n+##+\n#  #\n+##+";
+
+        let puzzles = discover(data);
+
+        assert_eq!(puzzles.len(), 1);
+        assert_eq!(puzzles[0].lines[0], "DIFFICULTY 4");
+        assert_eq!(puzzles[0].lines[1], "PUBLIC_ID 12345");
+        let parsed = crate::parser::parse(&puzzles[0].lines, "fixture", "fallback").unwrap();
+        assert_eq!(parsed.difficulty, 4);
+        assert_eq!(parsed.game_id, "12345");
     }
 }

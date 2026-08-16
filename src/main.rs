@@ -22,13 +22,22 @@ enum Command {
         /// Destination for generated puzzle data.
         #[arg(short, long, default_value = DEFAULT_DATA_FILE)]
         output: PathBuf,
+
+        /// Suppress extraction progress messages.
+        #[arg(long)]
+        quiet: bool,
     },
 }
 
 fn main() -> Result<()> {
     match Cli::parse().command {
-        Command::Extract { game_dir, output } => {
-            let report = extract::run(&ExtractOptions::new(game_dir, &output))?;
+        Command::Extract {
+            game_dir,
+            output,
+            quiet,
+        } => {
+            let options = ExtractOptions::new(game_dir, &output).with_progress(!quiet);
+            let report = extract::run(&options)?;
             println!(
                 "Extracted {} puzzles from {} candidate sources in {} PAK archives to {}",
                 report.puzzles,

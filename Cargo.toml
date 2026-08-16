@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-repak = { git = "https://github.com/trumank/repak.git", rev = "355b5f62f51959c7cc6dd5a51708646ef483065d", default-features = false, features = ["compression"] }
+repak = { git = "https://github.com/trumank/repak.git", rev = "355b5f62f51959c7cc6dd5a51708646ef483065d", default-features = false, features = ["compression", "oodle"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 walkdir = "2"

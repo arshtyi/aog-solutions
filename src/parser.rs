@@ -1,9 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use anyhow::{Context, Result, bail};
 
 use crate::model::{
-    Cell, CellKind, Compass, Edge, EdgeClue, Orientation, Position, Puzzle, VertexClue,
+    Cell, CellKind, Compass, Edge, EdgeClue, Orientation, Position, Puzzle, ShapeGlyph, VertexClue,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,7 +67,7 @@ pub fn parse(lines: &[String], source: &str, fallback_id: &str) -> Result<Puzzle
     }
 
     let ParsedGrid {
-        cells,
+        mut cells,
         empty_cells,
         given_edges,
         edge_clues,
@@ -92,11 +92,17 @@ pub fn parse(lines: &[String], source: &str, fallback_id: &str) -> Result<Puzzle
     }) {
         bail!("edge clue is absent from the solution in {source}: {clue:?}");
     }
+    derive_shape_glyphs(&mut cells, &empty_cells, &solution_edges);
+
+    let resource_id = fallback_id.to_owned();
+    let game_id = public_id
+        .filter(|id| !id.is_empty())
+        .or_else(|| game_id_from_resource_id(&resource_id))
+        .unwrap_or_else(|| resource_id.clone());
 
     Ok(Puzzle {
-        id: public_id
-            .filter(|id| !id.is_empty())
-            .unwrap_or_else(|| fallback_id.to_owned()),
+        game_id,
+        resource_id,
         source: source.to_owned(),
         width,
         height,
@@ -284,31 +290,14 @@ fn parse_cell_segment(
                 cursor += 2;
             }
         } else if byte == b'#' {
-            let bordered_number = content
-                .get(cursor + 1..cursor + 3)
-                .filter(|value| value.iter().all(u8::is_ascii_digit));
-            if let Some(value) = bordered_number {
-                insert_cell(
-                    cells,
+            if *logical_column <= width {
+                given_edges.insert(Edge {
+                    orientation: Orientation::Vertical,
                     row,
-                    *logical_column,
-                    width,
-                    height,
-                    CellKind::BorderedNumber,
-                    value,
-                );
-                *logical_column += 1;
-                cursor += 3;
-            } else {
-                if *logical_column <= width {
-                    given_edges.insert(Edge {
-                        orientation: Orientation::Vertical,
-                        row,
-                        column: *logical_column,
-                    });
-                }
-                cursor += 1;
+                    column: *logical_column,
+                });
             }
+            cursor += 1;
         } else if matches!(byte, b'U' | b'D' | b'L' | b'R') {
             let stop = take_while(content, cursor, |value| {
                 matches!(value, b'U' | b'D' | b'L' | b'R') || value.is_ascii_digit()
@@ -482,8 +471,129 @@ fn insert_cell(
             kind,
             text,
             compass,
+            glyph: None,
         },
     );
+}
+
+fn derive_shape_glyphs(cells: &mut [Cell], empties: &[Position], solution_edges: &[Edge]) {
+    let active: BTreeSet<_> = empties
+        .iter()
+        .map(|position| (position.row, position.column))
+        .chain(cells.iter().map(|cell| (cell.row, cell.column)))
+        .collect();
+    let boundaries: BTreeSet<_> = solution_edges.iter().cloned().collect();
+
+    for cell in cells.iter_mut().filter(|cell| cell.kind == CellKind::Shape) {
+        if cell.text.starts_with('F') {
+            cell.glyph = Some(ShapeGlyph::Boundary {
+                top: boundaries.contains(&Edge {
+                    orientation: Orientation::Horizontal,
+                    row: cell.row,
+                    column: cell.column,
+                }),
+                right: boundaries.contains(&Edge {
+                    orientation: Orientation::Vertical,
+                    row: cell.row,
+                    column: cell.column + 1,
+                }),
+                bottom: boundaries.contains(&Edge {
+                    orientation: Orientation::Horizontal,
+                    row: cell.row + 1,
+                    column: cell.column,
+                }),
+                left: boundaries.contains(&Edge {
+                    orientation: Orientation::Vertical,
+                    row: cell.row,
+                    column: cell.column,
+                }),
+            });
+        } else if cell.text.starts_with('S') {
+            let region = connected_region((cell.row, cell.column), &active, &boundaries);
+            let min_row = region.iter().map(|(row, _)| *row).min().unwrap_or(cell.row);
+            let min_column = region
+                .iter()
+                .map(|(_, column)| *column)
+                .min()
+                .unwrap_or(cell.column);
+            let max_row = region.iter().map(|(row, _)| *row).max().unwrap_or(cell.row);
+            let max_column = region
+                .iter()
+                .map(|(_, column)| *column)
+                .max()
+                .unwrap_or(cell.column);
+            cell.glyph = Some(ShapeGlyph::Polyomino {
+                width: max_column - min_column + 1,
+                height: max_row - min_row + 1,
+                cells: region
+                    .into_iter()
+                    .map(|(row, column)| Position {
+                        row: row - min_row,
+                        column: column - min_column,
+                    })
+                    .collect(),
+            });
+        }
+    }
+}
+
+fn connected_region(
+    start: (u32, u32),
+    active: &BTreeSet<(u32, u32)>,
+    boundaries: &BTreeSet<Edge>,
+) -> BTreeSet<(u32, u32)> {
+    let mut region = BTreeSet::from([start]);
+    let mut pending = VecDeque::from([start]);
+
+    while let Some((row, column)) = pending.pop_front() {
+        let mut visit = |neighbor, boundary| {
+            if active.contains(&neighbor)
+                && !boundaries.contains(&boundary)
+                && region.insert(neighbor)
+            {
+                pending.push_back(neighbor);
+            }
+        };
+
+        if row > 0 {
+            visit(
+                (row - 1, column),
+                Edge {
+                    orientation: Orientation::Horizontal,
+                    row,
+                    column,
+                },
+            );
+        }
+        visit(
+            (row + 1, column),
+            Edge {
+                orientation: Orientation::Horizontal,
+                row: row + 1,
+                column,
+            },
+        );
+        if column > 0 {
+            visit(
+                (row, column - 1),
+                Edge {
+                    orientation: Orientation::Vertical,
+                    row,
+                    column,
+                },
+            );
+        }
+        visit(
+            (row, column + 1),
+            Edge {
+                orientation: Orientation::Vertical,
+                row,
+                column: column + 1,
+            },
+        );
+    }
+
+    region
 }
 
 fn parse_compass(text: &str) -> Compass {
@@ -522,6 +632,26 @@ fn is_edge_clue(symbol: u8) -> bool {
     matches!(symbol, b'=' | b'<' | b'>' | b'!') || symbol.is_ascii_digit()
 }
 
+// The game derives its displayed five-digit puzzle ID from the numeric prefix
+// of the internal resource name, then permutes the decimal digits. This mirrors
+// Geri's GetPublicPuzzleID implementation; PUBLIC_ID remains an explicit
+// override for loose or future puzzle formats.
+fn game_id_from_resource_id(resource_id: &str) -> Option<String> {
+    let numeric_prefix: String = resource_id
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    let resource_number: u32 = numeric_prefix.parse().ok()?;
+    let encoded = 100_000_u32.checked_sub(resource_number.checked_mul(31)?)?;
+    let digits = format!("{encoded:05}");
+    let digits: Vec<_> = digits.chars().collect();
+    (digits.len() == 5).then(|| {
+        [digits[4], digits[2], digits[0], digits[1], digits[3]]
+            .into_iter()
+            .collect()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -553,7 +683,8 @@ mod tests {
     fn parses_reference_format() {
         let puzzle = parse(&sample(), "fixture", "fallback").unwrap();
 
-        assert_eq!(puzzle.id, "12345");
+        assert_eq!(puzzle.game_id, "12345");
+        assert_eq!(puzzle.resource_id, "fallback");
         assert_eq!((puzzle.width, puzzle.height, puzzle.difficulty), (2, 2, 3));
         assert_eq!(puzzle.cells.len(), 3);
         assert_eq!(puzzle.empty_cells, vec![Position { row: 1, column: 0 }]);
@@ -568,6 +699,63 @@ mod tests {
             column: 1,
             symbol: "=".to_owned(),
         }));
+        assert_eq!(
+            puzzle
+                .cells
+                .iter()
+                .find(|cell| cell.text == "F3")
+                .unwrap()
+                .glyph,
+            Some(ShapeGlyph::Boundary {
+                top: false,
+                right: true,
+                bottom: true,
+                left: true,
+            })
+        );
+    }
+
+    #[test]
+    fn derives_the_solved_polyomino_for_a_shape_marker() {
+        let mut cells = vec![Cell {
+            row: 0,
+            column: 0,
+            kind: CellKind::Shape,
+            text: "S1".to_owned(),
+            compass: None,
+            glyph: None,
+        }];
+        let empties = vec![
+            Position { row: 0, column: 1 },
+            Position { row: 1, column: 0 },
+            Position { row: 1, column: 1 },
+        ];
+        let solution_edges = vec![
+            Edge {
+                orientation: Orientation::Horizontal,
+                row: 1,
+                column: 0,
+            },
+            Edge {
+                orientation: Orientation::Horizontal,
+                row: 1,
+                column: 1,
+            },
+        ];
+
+        derive_shape_glyphs(&mut cells, &empties, &solution_edges);
+
+        assert_eq!(
+            cells[0].glyph,
+            Some(ShapeGlyph::Polyomino {
+                width: 2,
+                height: 1,
+                cells: vec![
+                    Position { row: 0, column: 0 },
+                    Position { row: 0, column: 1 },
+                ],
+            })
+        );
     }
 
     #[test]
@@ -581,5 +769,45 @@ mod tests {
                 right: Some(3),
             }
         );
+    }
+
+    #[test]
+    fn derives_the_same_public_id_as_the_game() {
+        assert_eq!(game_id_from_resource_id("0319"), Some("11901".into()));
+        assert_eq!(game_id_from_resource_id("0602"), Some("83813".into()));
+        assert_eq!(game_id_from_resource_id("0067B"), Some("39972".into()));
+        assert_eq!(game_id_from_resource_id("workshop"), None);
+    }
+
+    #[test]
+    fn treats_a_hash_before_a_two_digit_number_as_a_given_edge() {
+        let lines = [
+            "DIMENSIONS 2 1",
+            "PUZZLE",
+            "+--+--+",
+            "|10#10|",
+            "+--+--+",
+            "SOLUTION",
+            "+##+##+",
+            "#  #  #",
+            "+##+##+",
+        ]
+        .map(str::to_owned);
+
+        let puzzle = parse(&lines, "fixture", "0319").unwrap();
+
+        assert_eq!(
+            puzzle
+                .cells
+                .iter()
+                .map(|cell| cell.kind)
+                .collect::<Vec<_>>(),
+            vec![CellKind::Number, CellKind::Number],
+        );
+        assert!(puzzle.given_edges.contains(&Edge {
+            orientation: Orientation::Vertical,
+            row: 0,
+            column: 1,
+        }));
     }
 }

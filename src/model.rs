@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const FORMAT_VERSION: &str = "aog-solutions/1";
+pub const FORMAT_VERSION: &str = "aog-solutions/2";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Collection {
@@ -19,7 +19,8 @@ impl Collection {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Puzzle {
-    pub id: String,
+    pub game_id: String,
+    pub resource_id: String,
     pub source: String,
     pub width: u32,
     pub height: u32,
@@ -46,17 +47,34 @@ pub struct Cell {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compass: Option<Compass>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub glyph: Option<ShapeGlyph>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CellKind {
     Number,
-    BorderedNumber,
     Compass,
     Shape,
     Region,
     Symbol,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ShapeGlyph {
+    Boundary {
+        top: bool,
+        right: bool,
+        bottom: bool,
+        left: bool,
+    },
+    Polyomino {
+        width: u32,
+        height: u32,
+        cells: Vec<Position>,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
