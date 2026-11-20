@@ -1,5 +1,7 @@
 # The Artisan of Glimmith Solution Compendium
 
+> 新 DLC 即将推出,但无心适配.为避免可能的误会,归档仅供他人参考.
+
 Extracts campaign puzzles from *The Artisan of Glimmith* and generates a PDF containing every solution.
 
 ## Requirements
